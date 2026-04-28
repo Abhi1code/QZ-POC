@@ -122,6 +122,170 @@ rbO7BnjW
     return relPath;
   }
 
+  function isPdfSourceBundled() {
+    if (!document.getElementById("bundledPdfSelect")) {
+      return false;
+    }
+    var el = document.querySelector('input[name="pdfSourceMode"]:checked');
+    if (!el) {
+      return true;
+    }
+    return el.value === "bundled";
+  }
+
+  function getBundledPdfRelPath() {
+    var sel = document.getElementById("bundledPdfSelect");
+    return sel && sel.value ? String(sel.value) : "assets/sample.pdf";
+  }
+
+  /**
+   * Read a path next to this page (e.g. assets/*.pdf) as ArrayBuffer.
+   * file:// pages: fetch() often fails; XHR usually works for same-folder assets.
+   */
+  function readBundledAssetArrayBuffer(relPath) {
+    var href = new URL(relPath, window.location.href).href;
+    function viaXhr() {
+      return new Promise(function (resolve, reject) {
+        var xhr = new XMLHttpRequest();
+        xhr.open("GET", href, true);
+        xhr.responseType = "arraybuffer";
+        xhr.onload = function () {
+          var st = xhr.status;
+          if (st === 0 || (st >= 200 && st < 300)) {
+            if (!xhr.response || xhr.response.byteLength === 0) {
+              reject(new Error("Empty response for " + relPath));
+              return;
+            }
+            resolve(xhr.response);
+            return;
+          }
+          reject(
+            new Error(
+              "Could not load " +
+                relPath +
+                " (HTTP " +
+                st +
+                "). If you opened this page as file://, try python3 -m http.server in this folder."
+            )
+          );
+        };
+        xhr.onerror = function () {
+          reject(
+            new Error(
+              "Could not load " +
+                relPath +
+                " (network error). Serve this folder over http://localhost (file:// + fetch often blocks PDF bytes)."
+            )
+          );
+        };
+        xhr.send();
+      });
+    }
+    if (window.location.protocol === "file:") {
+      return viaXhr();
+    }
+    return fetch(href, { cache: "no-store" })
+      .then(function (r) {
+        if (!r.ok) {
+          throw new Error("Could not load " + relPath + " (" + r.status + ")");
+        }
+        return r.arrayBuffer();
+      })
+      .catch(function () {
+        return viaXhr();
+      });
+  }
+
+  /** Loads the currently chosen bundled or local PDF as ArrayBuffer (for in-browser PdfToZpl). */
+  function getSelectedPdfArrayBuffer() {
+    if (isPdfSourceBundled()) {
+      var rel = getBundledPdfRelPath();
+      return readBundledAssetArrayBuffer(rel);
+    }
+    var input = document.getElementById("pdfFile");
+    var file = input && input.files && input.files[0];
+    if (!file) {
+      return Promise.reject(new Error("Choose a PDF file first."));
+    }
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onerror = function () {
+        reject(new Error("Could not read the file."));
+      };
+      reader.onload = function () {
+        resolve(reader.result);
+      };
+      reader.readAsArrayBuffer(file);
+    });
+  }
+
+  function revokePdfPreviewBlobUrl() {
+    var frame = document.getElementById("pdfPreviewFrame");
+    if (!frame) {
+      return;
+    }
+    try {
+      if (frame.dataset.blobUrl) {
+        URL.revokeObjectURL(frame.dataset.blobUrl);
+        delete frame.dataset.blobUrl;
+      }
+    } catch (e) {}
+  }
+
+  function syncPdfSourceUi() {
+    var bundled = isPdfSourceBundled();
+    var bb = document.getElementById("bundledPdfBlock");
+    var cb = document.getElementById("computerPdfBlock");
+    var cap = document.getElementById("pdfPreviewCaption");
+    var frame = document.getElementById("pdfPreviewFrame");
+    if (!frame) {
+      return;
+    }
+    if (bb) {
+      bb.style.opacity = bundled ? "1" : "0.55";
+    }
+    if (cb) {
+      cb.style.opacity = bundled ? "0.55" : "1";
+    }
+    revokePdfPreviewBlobUrl();
+    if (bundled) {
+      frame.src = new URL(getBundledPdfRelPath(), window.location.href).href;
+      if (cap) {
+        cap.textContent = "Preview (bundled " + getBundledPdfRelPath() + ")";
+      }
+    } else {
+      frame.removeAttribute("src");
+      var input = document.getElementById("pdfFile");
+      var file = input && input.files && input.files[0];
+      if (file) {
+        var u = URL.createObjectURL(file);
+        frame.dataset.blobUrl = u;
+        frame.src = u;
+        if (cap) {
+          cap.textContent = "Preview (" + file.name + ")";
+        }
+      } else {
+        if (cap) {
+          cap.textContent = "Preview — choose a PDF file above";
+        }
+      }
+    }
+  }
+
+  function initPdfSourceUi() {
+    if (!document.getElementById("bundledPdfSelect")) {
+      return;
+    }
+    var radios = document.querySelectorAll('input[name="pdfSourceMode"]');
+    var i;
+    for (i = 0; i < radios.length; i++) {
+      radios[i].addEventListener("change", syncPdfSourceUi);
+    }
+    document.getElementById("bundledPdfSelect").addEventListener("change", syncPdfSourceUi);
+    document.getElementById("pdfFile").addEventListener("change", syncPdfSourceUi);
+    syncPdfSourceUi();
+  }
+
   function getForceRawOption() {
     var el = document.getElementById("forceRaw");
     return !!(el && el.checked);
@@ -166,6 +330,58 @@ rbO7BnjW
   function getSelectedPrinterName() {
     var sel = document.getElementById("printerSelect");
     return sel.value || null;
+  }
+
+  /** When several QZ printers exist, confirm the dropdown choice before each job (not used for TCP-only). */
+  function confirmQzPrinterDestination(printerName) {
+    var sel = document.getElementById("printerSelect");
+    if (!sel || sel.options.length <= 1) {
+      return true;
+    }
+    return window.confirm(
+      "Send this print job to:\n\n" +
+        printerName +
+        "\n\nOK = print. Cancel = stop (change the printer in the list first if needed)."
+    );
+  }
+
+  function refreshUsbDeviceSelectFromSessions() {
+    var row = document.getElementById("usbDeviceSelectRow");
+    var usbSel = document.getElementById("usbDeviceSelect");
+    var U = window.UsbRawPrinter;
+    if (!usbSel || !U || typeof U.getConnectedSummaries !== "function") {
+      return;
+    }
+    var list = U.getConnectedSummaries();
+    usbSel.innerHTML = "";
+    if (!list.length) {
+      if (row) {
+        row.style.display = "none";
+      }
+      return;
+    }
+    var i;
+    for (i = 0; i < list.length; i++) {
+      (function (info) {
+        var opt = document.createElement("option");
+        opt.value = String(info.index);
+        opt.textContent =
+          "#" +
+          String(info.index + 1) +
+          ": " +
+          (info.productName || "USB device") +
+          " (vid " +
+          info.vendorId +
+          " / pid " +
+          info.productId +
+          ")";
+        usbSel.appendChild(opt);
+      })(list[i]);
+    }
+    if (row) {
+      row.style.display = "block";
+    }
+    usbSel.selectedIndex = 0;
   }
 
   function getTcpCaptureHostPort() {
@@ -215,6 +431,10 @@ rbO7BnjW
           setStatus("Pick a printer (Refresh printers) or enable TCP capture.", "error");
           return Promise.reject(new Error("No printer selected"));
         }
+        if (!confirmQzPrinterDestination(printer)) {
+          setStatus("Print cancelled (printer not confirmed).", "error");
+          return Promise.reject(new Error("Print cancelled."));
+        }
         printerSpec = printer;
         destLabel = printer;
       }
@@ -251,6 +471,20 @@ rbO7BnjW
   }
 
   function printUserPdf() {
+    if (isPdfSourceBundled()) {
+      var rel = getBundledPdfRelPath();
+      var path = resolveBundledAssetPath(rel);
+      var pdfData = {
+        type: "pixel",
+        format: "pdf",
+        flavor: "file",
+        data: path,
+      };
+      return printPdfJob(pdfData).catch(function (err) {
+        setStatus("Print failed: " + (err && err.message ? err.message : err), "error");
+        log(String(err && err.stack ? err.stack : err));
+      });
+    }
     var input = document.getElementById("pdfFile");
     var file = input.files && input.files[0];
     if (!file) {
@@ -402,6 +636,18 @@ rbO7BnjW
       setStatus(cap.error, "error");
       return;
     }
+    if (isPdfSourceBundled()) {
+      var path = resolveBundledAssetPath(getBundledPdfRelPath());
+      var payloads = buildRawPdfPrintSequence(path, "file", "ZPL");
+      sendPrintJob(payloads, "capture-A-QZ-pdf2zpl-user", {}, {
+        host: cap.host,
+        port: cap.port,
+      }).catch(function (err) {
+        setStatus("Print failed: " + (err && err.message ? err.message : err), "error");
+        log(String(err && err.stack ? err.stack : err));
+      });
+      return;
+    }
     var input = document.getElementById("pdfFile");
     var file = input.files && input.files[0];
     if (!file) {
@@ -496,25 +742,10 @@ rbO7BnjW
       setStatus(cap.error, "error");
       return;
     }
-    var input = document.getElementById("pdfFile");
-    var file = input.files && input.files[0];
-    if (!file) {
-      setStatus("Choose a PDF file first.", "error");
-      return;
-    }
     clearBrowserZplRenderPreview();
     setBrowserZplScaleReportFromResult(null);
     setStatus("Path B: rendering PDF in browser…");
-    new Promise(function (resolve, reject) {
-      var reader = new FileReader();
-      reader.onerror = function () {
-        reject(new Error("Could not read the file."));
-      };
-      reader.onload = function () {
-        resolve(reader.result);
-      };
-      reader.readAsArrayBuffer(file);
-    })
+    getSelectedPdfArrayBuffer()
       .then(function (buf) {
         return window.PdfToZpl.convertPdfToZpl(buf, opts);
       })
@@ -552,6 +783,14 @@ rbO7BnjW
   }
 
   function printRawPdfUser() {
+    if (isPdfSourceBundled()) {
+      var path = resolveBundledAssetPath(getBundledPdfRelPath());
+      var payloads = buildRawPdfPrintSequence(path, "file");
+      return sendPrintJob(payloads, "QZ Tray client PDF as raw", {}).catch(function (err) {
+        setStatus("Print failed: " + (err && err.message ? err.message : err), "error");
+        log(String(err && err.stack ? err.stack : err));
+      });
+    }
     var input = document.getElementById("pdfFile");
     var file = input.files && input.files[0];
     if (!file) {
@@ -1146,16 +1385,14 @@ rbO7BnjW
   }
 
   function fetchSamplePdfArrayBuffer() {
-    var href = new URL("assets/sample.pdf", window.location.href).href;
-    return fetch(href).then(function (r) {
-      if (!r.ok) {
-        throw new Error("Could not load sample PDF (" + r.status + "): " + href);
-      }
-      return r.arrayBuffer();
-    });
+    return readBundledAssetArrayBuffer("assets/sample.pdf");
   }
 
   function generateBrowserZplFromSample() {
+    if (!window.PdfToZpl || typeof window.PdfToZpl.convertPdfToZpl !== "function") {
+      setStatus("PdfToZpl is not loaded (include pdf.js then pdfToZpl.js before app.js).", "error");
+      return Promise.resolve();
+    }
     var opts;
     try {
       opts = getBrowserZplUiOptions();
@@ -1235,10 +1472,8 @@ rbO7BnjW
   }
 
   function generateBrowserZplFromUser() {
-    var input = document.getElementById("pdfFile");
-    var file = input.files && input.files[0];
-    if (!file) {
-      setStatus("Choose a PDF file first.", "error");
+    if (!window.PdfToZpl || typeof window.PdfToZpl.convertPdfToZpl !== "function") {
+      setStatus("PdfToZpl is not loaded (include pdf.js then pdfToZpl.js before app.js).", "error");
       return Promise.resolve();
     }
     var opts;
@@ -1248,19 +1483,18 @@ rbO7BnjW
       setStatus(e && e.message ? e.message : String(e), "error");
       return Promise.resolve();
     }
+    if (!isPdfSourceBundled()) {
+      var input = document.getElementById("pdfFile");
+      var file = input && input.files && input.files[0];
+      if (!file) {
+        setStatus("Choose a PDF file first.", "error");
+        return Promise.resolve();
+      }
+    }
     clearBrowserZplRenderPreview();
     setBrowserZplScaleReportFromResult(null);
     setStatus("Rendering PDF (browser)…");
-    return new Promise(function (resolve, reject) {
-      var reader = new FileReader();
-      reader.onerror = function () {
-        reject(new Error("Could not read the file."));
-      };
-      reader.onload = function () {
-        resolve(reader.result);
-      };
-      reader.readAsArrayBuffer(file);
-    })
+    return getSelectedPdfArrayBuffer()
       .then(function (buf) {
         return window.PdfToZpl.convertPdfToZpl(buf, opts);
       })
@@ -1436,17 +1670,22 @@ rbO7BnjW
     }
     U.connectFirstRemembered()
       .then(function (info) {
-        setStatus(
-          "USB connected automatically: " +
-            (info.productName || "device") +
-            " (vid " +
-            info.vendorId +
-            " / pid " +
-            info.productId +
-            ").",
-          "connected"
-        );
-        log({ usbAutoReconnectOnLoad: info });
+        refreshUsbDeviceSelectFromSessions();
+        var n = U.getSessionCount && U.getSessionCount();
+        var msg =
+          n > 1
+            ? "USB auto-connected " +
+              String(n) +
+              " remembered device(s). Pick “USB print target” before sending ZPL."
+            : "USB connected automatically: " +
+              (info && info.productName ? info.productName : "device") +
+              " (vid " +
+              (info && info.vendorId) +
+              " / pid " +
+              (info && info.productId) +
+              ").";
+        setStatus(msg, "connected");
+        log({ usbAutoReconnectOnLoad: info, sessionCount: n });
       })
       .catch(function (err) {
         log({
@@ -1474,6 +1713,7 @@ rbO7BnjW
       .then(function (info) {
         markUsbGrantedForThisOrigin();
         syncUsbAutoReconnectCheckbox();
+        refreshUsbDeviceSelectFromSessions();
         setStatus(
           "USB connected: " +
             (info.productName || "device") +
@@ -1485,10 +1725,13 @@ rbO7BnjW
             info.packetSize +
             ", iface " +
             info.interfaceNumber +
-            ".",
+            ". " +
+            (U.getSessionCount && U.getSessionCount() > 1
+              ? "Multiple devices open — choose USB print target before sending."
+              : ""),
           "connected"
         );
-        log({ usbConnected: info });
+        log({ usbConnected: info, sessionCount: U.getSessionCount && U.getSessionCount() });
       })
       .catch(function (err) {
         if (err && err.name === "NotFoundError") {
@@ -1509,22 +1752,25 @@ rbO7BnjW
       );
       return Promise.resolve();
     }
-    setStatus("USB: opening remembered device…");
-    return U.connectFirstRemembered()
-      .then(function (info) {
+    setStatus("USB: opening all remembered devices…");
+    var openAll =
+      typeof U.connectAllRemembered === "function"
+        ? U.connectAllRemembered()
+        : U.connectFirstRemembered().then(function (info) {
+            return info ? [info] : [];
+          });
+    return openAll
+      .then(function (list) {
         markUsbGrantedForThisOrigin();
         syncUsbAutoReconnectCheckbox();
+        refreshUsbDeviceSelectFromSessions();
         setStatus(
-          "USB connected: " +
-            (info.productName || "device") +
-            " (vid " +
-            info.vendorId +
-            " / pid " +
-            info.productId +
-            ").",
+          "USB: opened " +
+            String(list.length) +
+            " remembered printer(s). Use “USB print target” before “Send generated ZPL → USB”.",
           "connected"
         );
-        log({ usbConnectedRemembered: info });
+        log({ usbConnectedRememberedAll: list });
       })
       .catch(function (err) {
         setStatus("USB reconnect failed: " + (err && err.message ? err.message : err), "error");
@@ -1538,7 +1784,8 @@ rbO7BnjW
       return Promise.resolve();
     }
     return U.disconnect().then(function () {
-      setStatus("USB disconnected.", "connected");
+      refreshUsbDeviceSelectFromSessions();
+      setStatus("USB disconnected (all sessions).", "connected");
       log("USB disconnected.");
     });
   }
@@ -1558,11 +1805,23 @@ rbO7BnjW
       return Promise.resolve();
     }
     if (!U.getConnectedSummary()) {
-      setStatus("Connect USB first (pick device or remembered).", "error");
+      setStatus("Connect USB first (pick device or open all remembered).", "error");
+      return Promise.resolve();
+    }
+    var usbSel = document.getElementById("usbDeviceSelect");
+    var sessionIdx = 0;
+    if (usbSel && usbSel.options.length) {
+      sessionIdx = parseInt(usbSel.value, 10);
+      if (!Number.isFinite(sessionIdx)) {
+        sessionIdx = 0;
+      }
+    }
+    if (U.getSessionCount && U.getSessionCount() > 1 && (!usbSel || !usbSel.options.length)) {
+      setStatus("Pick USB print target (refresh page or reconnect USB).", "error");
       return Promise.resolve();
     }
     setStatus("Sending ZPL job over USB…");
-    return U.sendRawBytes(lastBrowserZplJobBytes)
+    return U.sendRawBytes(lastBrowserZplJobBytes, sessionIdx)
       .then(function () {
         setStatus(
           "USB: sent " + String(lastBrowserZplJobBytes.length) + " byte(s) (raw ZPL job).",
@@ -1630,6 +1889,8 @@ rbO7BnjW
     setStatus("Disconnected.");
     log("(disconnected)");
   }
+
+  initPdfSourceUi();
 
   document.getElementById("connect").addEventListener("click", connect);
   document.getElementById("disconnect").addEventListener("click", disconnect);

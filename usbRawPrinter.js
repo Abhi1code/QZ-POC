@@ -1,6 +1,6 @@
 /**
  * WebUSB raw send — same pattern as ekartprintv3 PrinterManager: bulk OUT, chunk by packetSize, transferOut + retries.
- * For ZPL/PRN bytes generated in-browser (no QZ Tray).
+ * Supports multiple remembered devices open at once; pick target by session index when sending.
  */
 (function (global) {
   "use strict";
@@ -8,8 +8,8 @@
   var TRANSFER_RETRY_ATTEMPTS = 3;
   var RETRY_DELAY_MS = 100;
 
-  /** @type {{ device: USBDevice, endpoints: { in: *, out: * } } | null} */
-  var managed = null;
+  /** @type {Array<{ device: USBDevice, endpoints: { in: *, out: * } }>} */
+  var sessions = [];
 
   function isSupported() {
     return !!(global.navigator && global.navigator.usb);
@@ -60,13 +60,25 @@
     });
   }
 
-  function getConnectedSummary() {
-    if (!managed || !managed.device) {
+  function findSessionIndexByDevice(device) {
+    var i;
+    for (i = 0; i < sessions.length; i++) {
+      if (sessions[i].device === device) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  function getSessionSummary(index) {
+    var s = sessions[index];
+    if (!s || !s.device) {
       return null;
     }
-    var d = managed.device;
-    var out = managed.endpoints && managed.endpoints.out;
+    var d = s.device;
+    var out = s.endpoints && s.endpoints.out;
     return {
+      index: index,
       vendorId: d.vendorId,
       productId: d.productId,
       productName: d.productName || "",
@@ -75,14 +87,33 @@
     };
   }
 
-  function disconnect() {
-    if (!managed) {
+  /** @returns {Array<object>} summary for each open session (includes index). */
+  function getConnectedSummaries() {
+    var out = [];
+    var i;
+    for (i = 0; i < sessions.length; i++) {
+      var sum = getSessionSummary(i);
+      if (sum) {
+        out.push(sum);
+      }
+    }
+    return out;
+  }
+
+  /** First session summary, or null (backward compatible). */
+  function getConnectedSummary() {
+    if (!sessions.length) {
+      return null;
+    }
+    return getSessionSummary(0);
+  }
+
+  function releaseSessionEntry(entry) {
+    if (!entry || !entry.device) {
       return Promise.resolve();
     }
-    var m = managed;
-    managed = null;
-    var device = m.device;
-    var out = m.endpoints && m.endpoints.out;
+    var device = entry.device;
+    var out = entry.endpoints && entry.endpoints.out;
     return Promise.resolve()
       .then(function () {
         if (out && device.opened) {
@@ -96,31 +127,51 @@
       });
   }
 
-  /**
-   * @param {USBDevice} device
-   */
-  function openAndClaim(device) {
-    return disconnect().then(function () {
-      return device.open();
-    }).then(function () {
-      if (device.configuration === null) {
-        return device.selectConfiguration(1);
-      }
-    }).then(function () {
-      var endpoints = findBulkTransferEndpoints(device);
-      if (!endpoints.out) {
-        return device.close().catch(function () {}).then(function () {
-          throw new Error("Could not find a bulk OUT endpoint on this device.");
-        });
-      }
-      return device.claimInterface(endpoints.out.interfaceNumber).then(function () {
-        managed = { device: device, endpoints: endpoints };
-        return getConnectedSummary();
+  function disconnect() {
+    var copy = sessions.slice();
+    sessions = [];
+    return copy.reduce(function (p, entry) {
+      return p.then(function () {
+        return releaseSessionEntry(entry);
       });
-    });
+    }, Promise.resolve());
   }
 
-  /** User gesture: system picker (filters empty = any device, like testing a Zebra). */
+  /**
+   * Open + claim one device and append (or refresh) session list.
+   * @returns {Promise<number>} session index
+   */
+  function addSession(device) {
+    var existing = findSessionIndexByDevice(device);
+    if (existing >= 0) {
+      var d0 = sessions[existing].device;
+      if (d0.opened) {
+        return Promise.resolve(existing);
+      }
+      sessions.splice(existing, 1);
+    }
+    return device
+      .open()
+      .then(function () {
+        if (device.configuration === null) {
+          return device.selectConfiguration(1);
+        }
+      })
+      .then(function () {
+        var endpoints = findBulkTransferEndpoints(device);
+        if (!endpoints.out) {
+          return device.close().catch(function () {}).then(function () {
+            throw new Error("Could not find a bulk OUT endpoint on this device.");
+          });
+        }
+        return device.claimInterface(endpoints.out.interfaceNumber).then(function () {
+          sessions.push({ device: device, endpoints: endpoints });
+          return sessions.length - 1;
+        });
+      });
+  }
+
+  /** User gesture: system picker (filters empty = any device, like testing a Zebra). Adds without closing other sessions. */
   function connectPickDevice() {
     if (!isSupported()) {
       return Promise.reject(
@@ -128,12 +179,14 @@
       );
     }
     return navigator.usb.requestDevice({ filters: [] }).then(function (device) {
-      return openAndClaim(device);
+      return addSession(device).then(function (idx) {
+        return getSessionSummary(idx);
+      });
     });
   }
 
-  /** Re-open first device the user already granted (no picker). */
-  function connectFirstRemembered() {
+  /** Open every device the browser already remembers for this origin (no picker). */
+  function connectAllRemembered() {
     if (!isSupported()) {
       return Promise.reject(new Error("WebUSB not available."));
     }
@@ -143,14 +196,56 @@
           "No remembered USB devices. Use “Connect USB (pick device)” once and allow access."
         );
       }
-      return openAndClaim(list[0]);
+      var chain = Promise.resolve();
+      var opened = 0;
+      var i;
+      for (i = 0; i < list.length; i++) {
+        (function (dev) {
+          chain = chain.then(function () {
+            return addSession(dev)
+              .then(function () {
+                opened++;
+              })
+              .catch(function (err) {
+                global.console.warn("WebUSB skip device:", err && err.message ? err.message : err);
+              });
+          });
+        })(list[i]);
+      }
+      return chain.then(function () {
+        if (!sessions.length) {
+          throw new Error("Could not open any remembered USB device (all failed or lack bulk OUT).");
+        }
+        return getConnectedSummaries();
+      });
+    });
+  }
+
+  /** @deprecated Prefer {@link connectAllRemembered}; kept for callers that expect one open pass. */
+  function connectFirstRemembered() {
+    return connectAllRemembered().then(function (list) {
+      return list && list[0] ? list[0] : getConnectedSummary();
     });
   }
 
   /**
    * @param {Uint8Array} u8
+   * @param {number} [sessionIndex] required when more than one session is open
    */
-  function sendRawBytes(u8) {
+  function sendRawBytes(u8, sessionIndex) {
+    var idx =
+      sessionIndex != null && Number.isFinite(Number(sessionIndex))
+        ? Number(sessionIndex)
+        : 0;
+    if (sessions.length > 1 && (sessionIndex == null || !Number.isFinite(Number(sessionIndex)))) {
+      return Promise.reject(
+        new Error("Multiple USB printers are connected — choose one in “USB print target” before sending.")
+      );
+    }
+    if (idx < 0 || idx >= sessions.length) {
+      return Promise.reject(new Error("Invalid USB session index."));
+    }
+    var managed = sessions[idx];
     if (!managed || !managed.endpoints || !managed.endpoints.out) {
       return Promise.reject(new Error("USB device not connected."));
     }
@@ -190,8 +285,8 @@
     return transferChunk(0);
   }
 
-  /** Optional: same line normalization as ekart PrintJobManager for pasted ZPL text. */
-  function sendZplText(str) {
+  /** @param {string} str @param {number} [sessionIndex] */
+  function sendZplText(str, sessionIndex) {
     var normalized = String(str || "")
       .replace(/\r\n/g, "\n")
       .replace(/\r/g, "\n")
@@ -202,16 +297,21 @@
       .join("\n")
       .trim();
     var enc = new TextEncoder();
-    return sendRawBytes(enc.encode(normalized + "\n"));
+    return sendRawBytes(enc.encode(normalized + "\n"), sessionIndex);
   }
 
   global.UsbRawPrinter = {
     isSupported: isSupported,
     connectPickDevice: connectPickDevice,
     connectFirstRemembered: connectFirstRemembered,
+    connectAllRemembered: connectAllRemembered,
     disconnect: disconnect,
     sendRawBytes: sendRawBytes,
     sendZplText: sendZplText,
     getConnectedSummary: getConnectedSummary,
+    getConnectedSummaries: getConnectedSummaries,
+    getSessionCount: function () {
+      return sessions.length;
+    },
   };
 })(typeof window !== "undefined" ? window : globalThis);

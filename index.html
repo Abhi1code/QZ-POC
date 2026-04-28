@@ -18,6 +18,9 @@
     label.inline { display: inline; margin: 0 0 0.75rem; }
     select, input[type="file"] { max-width: 100%; }
     select { min-width: 12rem; padding: 0.35rem; }
+    .pdf-source-fieldset { border: 1px solid #e4e4e7; border-radius: 6px; padding: 0.75rem 1rem 1rem; margin: 0.75rem 0; }
+    .pdf-source-fieldset legend { font-size: 0.9rem; padding: 0 0.35rem; }
+    #pdfPreviewFrame { width: 100%; height: min(55vh, 480px); border: 1px solid #d4d4d8; border-radius: 4px; background: #fafafa; }
   </style>
 </head>
 <body>
@@ -36,8 +39,36 @@
       <button type="button" id="printSamplePdf">Print sample PDF</button>
       <span style="color:#52525b;font-size:0.9rem">Uses <code>assets/sample.pdf</code> (bundled).</span>
     </p>
-    <label for="pdfFile">Your PDF</label>
-    <input type="file" id="pdfFile" accept="application/pdf" />
+    <fieldset class="pdf-source-fieldset">
+      <legend>PDF for “your PDF” actions</legend>
+      <p style="margin:0 0 0.5rem;font-size:0.9rem;color:#52525b">
+        Pick a bundled file from <code>assets/</code> or a PDF from this computer. Used for print, raw PDF, Path A/B capture, and in-browser PDF→ZPL.
+      </p>
+      <p style="margin:0 0 0.5rem">
+        <label class="inline"><input type="radio" name="pdfSourceMode" id="pdfSourceBundled" value="bundled" checked /> <span>Bundled <code>assets/</code> PDF</span></label>
+        <label class="inline" style="margin-left:1rem"><input type="radio" name="pdfSourceMode" id="pdfSourceComputer" value="computer" /> <span>This computer</span></label>
+      </p>
+      <div id="bundledPdfBlock">
+        <label for="bundledPdfSelect">PDF from <code>assets/</code> (when “Bundled” is selected)</label>
+        <select id="bundledPdfSelect" aria-label="Bundled PDF from assets folder">
+          <option value="assets/sample.pdf">sample.pdf — demo sample</option>
+          <option value="assets/label.pdf">label.pdf</option>
+          <option value="assets/customerInvoice_1000015435536.pdf">customerInvoice_1000015435536.pdf</option>
+          <option value="assets/shipping_label_1000015964308_1777369100354.pdf">shipping_label_1000015964308_1777369100354.pdf</option>
+          <option value="assets/shipping_label_100055070160_1777367990816.pdf">shipping_label_100055070160_1777367990816.pdf</option>
+          <option value="assets/1de48121-46f3-4751-8486-ffd4b4f999cf.pdf">1de48121-46f3-4751-8486-ffd4b4f999cf.pdf</option>
+          <option value="assets/1de48121-46f3-4751-8486-ffd4b4f999cf (1).pdf">1de48121-… (1).pdf</option>
+        </select>
+      </div>
+      <div id="computerPdfBlock" style="margin-top:0.75rem">
+        <label for="pdfFile">PDF from this computer (when “This computer” is selected)</label>
+        <input type="file" id="pdfFile" accept="application/pdf" />
+      </div>
+      <div id="pdfPreviewWrap" style="margin-top:0.75rem">
+        <p id="pdfPreviewCaption" style="font-size:0.85rem;color:#52525b;margin:0 0 0.35rem">Preview</p>
+        <iframe id="pdfPreviewFrame" title="Selected PDF preview"></iframe>
+      </div>
+    </fieldset>
     <p><button type="button" id="printUserPdf">Print selected PDF</button></p>
     <h3 style="margin-top:1.25rem;font-size:1rem">PDF → raw (PRN-style via QZ)</h3>
     <p style="font-size:0.9rem;color:#52525b;margin:0 0 0.5rem">
@@ -122,13 +153,18 @@
     </p>
     <h4 style="margin:1rem 0 0.35rem;font-size:0.95rem;font-weight:600">WebUSB — same idea as ekartprintv3 (bulk OUT, chunked <code>transferOut</code>)</h4>
     <p style="font-size:0.9rem;color:#52525b;margin:0 0 0.5rem">
-      No QZ Tray: pair the printer once, then send the <strong>current</strong> in-browser ZPL job bytes straight to USB. Requires <strong>Chrome or Edge</strong> on <strong>https://</strong> or <strong>http://localhost</strong> (not <code>file://</code>). If <code>claimInterface</code> fails, another app or the OS may own the device — pause CUPS/close other drivers and retry.
+      No QZ Tray: pair each printer once, then <strong>connect all remembered</strong> USB devices. With more than one open, pick the <strong>USB print target</strong> before sending ZPL. Requires <strong>Chrome or Edge</strong> on <strong>https://</strong> or <strong>http://localhost</strong> (not <code>file://</code>). If <code>claimInterface</code> fails, another app or the OS may own the device — pause CUPS/close other drivers and retry.
     </p>
     <p>
       <button type="button" id="usbZplConnectPick">Connect USB (pick device)</button>
-      <button type="button" id="usbZplConnectRemembered">Connect USB (remembered)</button>
-      <button type="button" id="usbZplDisconnect">Disconnect USB</button>
+      <button type="button" id="usbZplConnectRemembered">Connect all remembered USB printers</button>
+      <button type="button" id="usbZplDisconnect">Disconnect all USB</button>
       <button type="button" id="browserZplPrintUsb">Send generated ZPL → USB</button>
+    </p>
+    <p id="usbDeviceSelectRow" style="margin:0.5rem 0 0;display:none">
+      <label for="usbDeviceSelect">USB print target</label>
+      <select id="usbDeviceSelect" aria-label="Which WebUSB printer to send bytes to" style="min-width:20rem;padding:0.35rem;margin-top:0.25rem;display:block"></select>
+      <span style="color:#71717a;font-size:0.85rem">Shown when at least one USB session is open. Add more devices with “pick device” — they stay connected together until you disconnect all.</span>
     </p>
     <p style="margin:0.35rem 0 0">
       <label class="inline">
@@ -136,7 +172,7 @@
         <span>Auto-connect remembered USB when this page loads</span>
       </label>
       <span style="color:#71717a;font-size:0.85rem">
-        After the <strong>first</strong> successful USB connect here, reloads and browser restarts skip the picker as long as Chrome still trusts this <strong>exact</strong> URL and the printer is plugged in.
+        On load, all <strong>remembered</strong> USB printers are opened when this is checked. QZ Tray jobs: if several system printers appear after <strong>Refresh printers</strong>, each print asks you to confirm the one selected in the printer dropdown.
       </span>
     </p>
     <h3 style="margin-top:1.25rem;font-size:1rem">TCP capture: Path A (QZ) vs Path B (browser)</h3>
