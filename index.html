@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>QZ Tray client</title>
+  <style>
+    :root { font-family: system-ui, sans-serif; line-height: 1.5; }
+    body { max-width: 42rem; margin: 2rem auto; padding: 0 1rem; }
+    #status { padding: 0.75rem 1rem; border-radius: 6px; background: #f4f4f5; }
+    #status.connected { background: #dcfce7; }
+    #status.error { background: #fee2e2; }
+    button { margin-right: 0.5rem; margin-bottom: 0.5rem; padding: 0.4rem 0.75rem; cursor: pointer; }
+    pre { background: #18181b; color: #fafafa; padding: 1rem; border-radius: 6px; overflow: auto; font-size: 0.85rem; }
+    .hint { color: #52525b; font-size: 0.9rem; margin-top: 1.5rem; }
+    section { margin-top: 1.75rem; padding-top: 1rem; border-top: 1px solid #e4e4e7; }
+    label { display: block; margin: 0.35rem 0 0.15rem; font-size: 0.9rem; }
+    label.inline { display: inline; margin: 0 0 0.75rem; }
+    select, input[type="file"] { max-width: 100%; }
+    select { min-width: 12rem; padding: 0.35rem; }
+  </style>
+</head>
+<body>
+  <h1>QZ Tray client</h1>
+  <p id="status">Not connected.</p>
+  <p>
+    <button type="button" id="connect">Connect</button>
+    <button type="button" id="disconnect">Disconnect</button>
+    <button type="button" id="refreshPrinters">Refresh printers</button>
+  </p>
+  <section>
+    <h2>Print PDF</h2>
+    <label for="printerSelect">Printer</label>
+    <select id="printerSelect" aria-label="Printer"></select>
+    <p>
+      <button type="button" id="printSamplePdf">Print sample PDF</button>
+      <span style="color:#52525b;font-size:0.9rem">Uses <code>assets/sample.pdf</code> (bundled).</span>
+    </p>
+    <label for="pdfFile">Your PDF</label>
+    <input type="file" id="pdfFile" accept="application/pdf" />
+    <p><button type="button" id="printUserPdf">Print selected PDF</button></p>
+    <h3 style="margin-top:1.25rem;font-size:1rem">PDF → raw (PRN-style via QZ)</h3>
+    <p style="font-size:0.9rem;color:#52525b;margin:0 0 0.5rem">
+      A real <code>.prn</code> file is whatever a specific Windows driver emits; this page cannot build that in the browser. Instead, QZ Tray can turn a PDF into <strong>ESC/POS, ZPL, or EPL</strong> and send that as a raw job (same pattern as the official demo’s “PDF” raw button).
+    </p>
+    <label for="rawPdfLanguage">Printer language for conversion</label>
+    <select id="rawPdfLanguage" aria-label="Raw PDF target language">
+      <option value="ESCPOS">ESCPOS (receipt)</option>
+      <option value="ZPL" selected>ZPL (Zebra)</option>
+      <option value="EPL">EPL (Eltron)</option>
+    </select>
+    <p>
+      <button type="button" id="printRawPdfSample">Print sample PDF as raw</button>
+      <button type="button" id="printRawPdfUser">Print selected PDF as raw</button>
+    </p>
+    <p style="font-size:0.9rem;color:#52525b;margin:0 0 0.5rem">
+      When <strong>Printer language</strong> is <strong>ZPL</strong>, QZ raw PDF uses <code>pageRanges: &quot;1&quot;</code> in this demo (first page only for Path A). In-browser PDF→ZPL below can render <strong>all</strong> pages when <strong>All PDF pages</strong> is checked. EPL / ESC/POS are unchanged.
+    </p>
+    <h3 style="margin-top:1.25rem;font-size:1rem">PDF → ZPL (in-browser)</h3>
+    <p style="font-size:0.9rem;color:#52525b;margin:0 0 0.5rem">
+      Base pdf.js scale is <code>DPI÷72</code> (PDF points → dots at that DPI). Leave <strong>Raster DPI</strong> empty to use <strong>203</strong>. Optional <strong>pdf.js scale</strong> overrides that mapping entirely. Optional <strong>paper width and height</strong> (inches): when <strong>both</strong> are set, the raster is scaled to fit that dot box (<code>paper × Raster DPI</code>) using the fit policy below; leave both empty to use PDF size only. <strong>All PDF pages</strong>: one <code>^XA…^XZ</code> per page. Preview = <strong>1-bit after the same LUMA threshold</strong> as <code>^GFA</code>. <code>pageWidth</code> / supersample = <strong>QZ raw PDF</strong> only.
+    </p>
+    <label for="browserZplRasterDpi">Raster DPI (empty = 203)</label>
+    <input type="number" id="browserZplRasterDpi" value="203" min="72" max="600" step="1" style="width:4.5rem;padding:0.35rem" title="Base scale = DPI÷72 when pdf.js scale is empty. Clear the field for default 203." />
+    <br style="display:block;margin-top:0.35rem" />
+    <label for="browserZplPaperWidthIn">Paper width (in, optional)</label>
+    <input type="number" id="browserZplPaperWidthIn" value="" min="0.125" max="24" step="0.125" placeholder="—" style="width:5rem;padding:0.35rem" title="With paper height: max raster width in dots = this × Raster DPI. Leave empty to skip." />
+    <label for="browserZplPaperHeightIn" style="margin-left:0.75rem">Paper height (in, optional)</label>
+    <input type="number" id="browserZplPaperHeightIn" value="" min="0.125" max="24" step="0.125" placeholder="—" style="width:5rem;padding:0.35rem" title="With paper width: max raster height in dots = this × Raster DPI." />
+    <p style="margin:0.5rem 0 0">
+      <label for="browserZplLabelFitPolicy">Fit policy (only when both paper sizes are set)</label>
+      <select id="browserZplLabelFitPolicy" style="min-width:15rem;padding:0.35rem;margin-top:0.25rem;display:block" title="Shrink if larger: scale = min(DPI÷72, fit to box). Always scale to box: scale = cap so the page fits the paper box.">
+        <option value="shrink-if-needed" selected>Shrink if larger than paper box</option>
+        <option value="always-fit-box">Always scale to paper box</option>
+      </select>
+    </p>
+    <br style="display:block;margin-top:0.35rem" />
+    <label for="browserZplRenderScale">pdf.js scale (optional override)</label>
+    <input type="number" id="browserZplRenderScale" value="" min="0.25" max="12" step="0.25" placeholder="auto" style="width:5rem;padding:0.35rem" title="Leave empty: scale = Raster DPI ÷ 72. When paper box is set, fit policy still applies to that box." />
+    <label for="browserZplPageWidth"><code>pageWidth</code> (QZ raw PDF only; PDF points, empty = scale 1.0)</label>
+    <input type="number" id="browserZplPageWidth" value="" min="0" max="8192" placeholder="(empty)" style="width:6rem;padding:0.35rem" />
+    <label for="browserZplPageHeight"><code>pageHeight</code> (QZ raw PDF only; optional, PDF points)</label>
+    <input type="number" id="browserZplPageHeight" value="" min="0" max="8192" placeholder="(empty)" style="width:6rem;padding:0.35rem" />
+    <label for="browserZplThreshold"><code>threshold</code> (0–255, QZ default 127; LUMA black/white)</label>
+    <input type="number" id="browserZplThreshold" value="127" min="0" max="255" style="width:5rem;padding:0.35rem" />
+    <label class="inline" style="margin-left:0.5rem" title="Off = sharper (recommended). On = browser smoothing on the canvas."><input type="checkbox" id="browserZplImageSmoothing" /> <span>Canvas smoothing</span></label>
+    <br style="display:block;margin-top:0.35rem" />
+    <label for="browserZplSuperSample">Supersample (QZ raw PDF only; not used for in-browser PDF→ZPL)</label>
+    <select id="browserZplSuperSample" aria-label="Supersample" style="min-width:5rem;padding:0.35rem">
+      <option value="1">1× (direct)</option>
+      <option value="2" selected>2×</option>
+      <option value="3">3×</option>
+    </select>
+    <p>
+      <label class="inline"><input type="checkbox" id="browserZplInvert" /> <span>Invert (white ↔ black)</span></label>
+    </p>
+    <p>
+      <button type="button" id="browserZplFromSample">Generate ZPL from sample PDF</button>
+      <button type="button" id="browserZplFromUser">Generate ZPL from selected PDF</button>
+    </p>
+    <p id="browserZplScaleReport" style="font-size:0.9rem;color:#3f3f46;margin:0.35rem 0 0;min-height:1.35em" aria-live="polite"></p>
+    <p>
+      <label class="inline"><input type="checkbox" id="browserZplAllPages" checked /> <span>All PDF pages</span></label>
+      <span style="color:#71717a;font-size:0.85rem">(unchecked = page 1 only; each page is one <code>^XA…^XZ</code> label, previews below)</span>
+    </p>
+    <div id="browserPdfRenderPreviewWrap" style="display:none;margin:0.75rem 0">
+      <p style="font-size:0.9rem;color:#52525b;margin:0 0 0.35rem">
+        <strong>1-bit preview</strong> (same LUMA + threshold as <code>^GFA</code>, after pdf.js render). One image per page when <strong>All PDF pages</strong> is on.
+      </p>
+      <div id="browserPdfRenderPreviewStrip" style="display:flex;flex-wrap:wrap;gap:1rem;align-items:flex-start"></div>
+      <p style="margin:0.5rem 0 0">
+        <button type="button" id="browserPdfSaveRenderPng">Save page 1 threshold preview as PNG</button>
+        <button type="button" id="browserPdfSaveAllRenderPng" style="margin-left:0.5rem">Save all threshold previews as PNG</button>
+      </p>
+    </div>
+    <label for="browserZplPreview">ZPL preview (placeholder for long <code>^GFA</code> hex; job is sent as raw bytes via base64)</label>
+    <textarea id="browserZplPreview" rows="8" readonly style="width:100%;box-sizing:border-box;font-family:ui-monospace,monospace;font-size:0.8rem"></textarea>
+    <p>
+      <button type="button" id="browserZplPrintRaw">Print generated ZPL (raw)</button>
+      <button type="button" id="browserZplPrintTcp">Print generated ZPL → TCP capture</button>
+      <span style="color:#52525b;font-size:0.9rem">Connect QZ first. TCP uses host/port below; respect <strong>For all jobs…</strong> vs printer dropdown like other raw actions.</span>
+    </p>
+    <h4 style="margin:1rem 0 0.35rem;font-size:0.95rem;font-weight:600">WebUSB — same idea as ekartprintv3 (bulk OUT, chunked <code>transferOut</code>)</h4>
+    <p style="font-size:0.9rem;color:#52525b;margin:0 0 0.5rem">
+      No QZ Tray: pair the printer once, then send the <strong>current</strong> in-browser ZPL job bytes straight to USB. Requires <strong>Chrome or Edge</strong> on <strong>https://</strong> or <strong>http://localhost</strong> (not <code>file://</code>). If <code>claimInterface</code> fails, another app or the OS may own the device — pause CUPS/close other drivers and retry.
+    </p>
+    <p>
+      <button type="button" id="usbZplConnectPick">Connect USB (pick device)</button>
+      <button type="button" id="usbZplConnectRemembered">Connect USB (remembered)</button>
+      <button type="button" id="usbZplDisconnect">Disconnect USB</button>
+      <button type="button" id="browserZplPrintUsb">Send generated ZPL → USB</button>
+    </p>
+    <p style="margin:0.35rem 0 0">
+      <label class="inline">
+        <input type="checkbox" id="usbZplAutoReconnect" checked />
+        <span>Auto-connect remembered USB when this page loads</span>
+      </label>
+      <span style="color:#71717a;font-size:0.85rem">
+        After the <strong>first</strong> successful USB connect here, reloads and browser restarts skip the picker as long as Chrome still trusts this <strong>exact</strong> URL and the printer is plugged in.
+      </span>
+    </p>
+    <h3 style="margin-top:1.25rem;font-size:1rem">TCP capture: Path A (QZ) vs Path B (browser)</h3>
+    <p style="font-size:0.9rem;color:#52525b;margin:0 0 0.5rem">
+      Start <code>python3 tools/print_capture_server.py</code> first. It saves each job as <code>.bin</code> and (unless <code>--no-post-process</code>) also writes <strong><code>.png</code></strong> for ZPL with <code>^GFA</code> or <code>^GFB</code>, and (unless <code>--no-ps-pdf</code>) <strong><code>.pdf</code></strong> for PostScript via <code>gs</code>.
+      <strong>Path A</strong>: QZ Tray converts PDF→ZPL internally, then sends <strong>raw</strong> bytes to <strong>host:port</strong> (bypasses CUPS PostScript).
+      <strong>Path B</strong>: same as “browser” above — converts PDF→ZPL here, then one-click send to TCP.
+    </p>
+    <label for="tcpCaptureHost">Capture host</label>
+    <input type="text" id="tcpCaptureHost" value="127.0.0.1" style="width:10rem;padding:0.35rem" autocomplete="off" />
+    <label for="tcpCapturePort">Capture port</label>
+    <input type="number" id="tcpCapturePort" value="9100" min="1" max="65535" style="width:6rem;padding:0.35rem" />
+    <p>
+      <label class="inline" style="display:block;margin-top:0.5rem">
+        <input type="checkbox" id="useTcpCapture" />
+        <span>For <strong>all</strong> jobs below that use “Print …”, send to this TCP address instead of the printer dropdown (pixel PDF still uses the queue unless you pick a TCP-only flow).</span>
+      </label>
+    </p>
+    <p><strong>Path A — QZ converts PDF→ZPL</strong></p>
+    <p>
+      <button type="button" id="pathAQzTcpSample">Sample PDF → ZPL (QZ) → TCP</button>
+      <button type="button" id="pathAQzTcpUser">Selected PDF → ZPL (QZ) → TCP</button>
+    </p>
+    <p><strong>Path B — browser PDF→ZPL → TCP</strong> (one click; uses PDF raster options above)</p>
+    <p>
+      <button type="button" id="pathBUiTcpSample">Sample PDF → ZPL (browser) → TCP</button>
+      <button type="button" id="pathBUiTcpUser">Selected PDF → ZPL (browser) → TCP</button>
+    </p>
+  </section>
+  <section>
+    <h2>Print PRN (raw)</h2>
+    <p style="font-size:0.9rem;color:#52525b;margin:0 0 0.75rem">
+      Sends bytes with <code>type: raw</code>, <code>format: command</code> (QZ Tray). Use a PRN/spool capture that matches the selected printer (PCL, PostScript, ESC/POS, etc.).
+    </p>
+    <label class="inline"><input type="checkbox" id="forceRaw" /> <span>Force raw (<code>forceRaw</code>) — bypass driver where supported</span></label>
+    <p style="font-size:0.85rem;color:#52525b;margin:0 0 0.5rem">Printer: use the dropdown under Print PDF (refresh printers if needed).</p>
+    <p>
+      <button type="button" id="printSamplePrn">Print sample PRN</button>
+      <span style="color:#52525b;font-size:0.9rem"><code>assets/sample.prn</code> (small ESC/POS demo — receipt printers).</span>
+    </p>
+    <label for="prnFile">Your PRN or raw file</label>
+    <input type="file" id="prnFile" accept=".prn,.bin,application/octet-stream" />
+    <p><button type="button" id="printUserPrn">Print selected PRN</button></p>
+  </section>
+  <pre id="log"></pre>
+  <p class="hint">
+    Open this page from disk (double-click <code>index.html</code> or drag it into the browser) for QZ-only demos. For <strong>WebUSB</strong> (“Send generated ZPL → USB”), serve the folder over <code>http://localhost</code> or HTTPS so the browser exposes <code>navigator.usb</code>. Scripts are plain JavaScript next to this HTML; no build step.
+    <br /><br />
+    <strong>No physical printer?</strong> For <strong>ZPL on the wire</strong> (no PostScript): run the capture server and use <strong>Path A</strong> or <strong>Path B</strong> above; check <code>tools/captured_prints/</code> for <code>.bin</code> plus auto <code>.png</code>/<code>.pdf</code>. The <code>QZCapture</code> CUPS queue is <strong>Generic PostScript</strong> — use it for PS/pixel testing, not ZPL mimicry; see <code>tools/zebra_like_virtual_printer.txt</code>. Install queue: <code>cd tools &amp;&amp; python3 install_virtual_printer.py</code>.
+  </p>
+  <script src="vendor/pdf.min.js"></script>
+  <script src="pdfToZpl.js"></script>
+  <script src="usbRawPrinter.js"></script>
+  <script src="vendor/qz-tray.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

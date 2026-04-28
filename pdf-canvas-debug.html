@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PDF → canvas (dimensions)</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        max-width: 56rem;
+        margin: 1.5rem auto;
+        padding: 0 1rem;
+        color: #18181b;
+      }
+      h1 {
+        font-size: 1.15rem;
+      }
+      .panel {
+        background: #fafafa;
+        border: 1px solid #e4e4e7;
+        border-radius: 8px;
+        padding: 1rem;
+        margin: 1rem 0;
+      }
+      dl {
+        margin: 0;
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 0.35rem 1.25rem;
+      }
+      dt {
+        font-weight: 600;
+        color: #52525b;
+      }
+      dd {
+        margin: 0;
+        font-variant-numeric: tabular-nums;
+      }
+      canvas {
+        display: block;
+        margin-top: 0.75rem;
+        max-width: 100%;
+        height: auto;
+        border: 1px solid #d4d4d8;
+        border-radius: 4px;
+        background: #fff;
+      }
+      label {
+        margin-right: 0.5rem;
+      }
+      input[type="number"] {
+        width: 4.5rem;
+        padding: 0.25rem 0.35rem;
+      }
+      .err {
+        color: #b91c1c;
+        margin-top: 0.5rem;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>PDF on canvas — page size vs bitmap size</h1>
+    <p style="color: #52525b; font-size: 0.9rem">
+      Pick a PDF. Page 1 is drawn with pdf.js. Numbers below are the viewport at scale 1 (PDF user
+      units / points from the page box) and the actual canvas pixel size after rendering at the chosen
+      scale (<code>ceil</code> of viewport width and height).
+    </p>
+    <div class="panel">
+      <p>
+        <label for="pdfFile">PDF file</label>
+        <input type="file" id="pdfFile" accept="application/pdf" />
+      </p>
+      <p>
+        <label for="renderScale">Render scale</label>
+        <input type="number" id="renderScale" value="2" min="0.25" max="8" step="0.25" />
+        <span style="color: #71717a; font-size: 0.85rem">viewport = page.getViewport({ scale })</span>
+      </p>
+    </div>
+    <div class="panel" id="statsPanel" hidden>
+      <dl>
+        <dt>PDF page 1 (scale 1 viewport)</dt>
+        <dd id="pdfSize">—</dd>
+        <dt>Rendered canvas (pixels)</dt>
+        <dd id="canvasSize">—</dd>
+        <dt>Scale used</dt>
+        <dd id="scaleUsed">—</dd>
+      </dl>
+      <canvas id="out" width="0" height="0"></canvas>
+    </div>
+    <p class="err" id="err" hidden></p>
+
+    <script src="vendor/pdf.min.js"></script>
+    <script>
+      (function () {
+        "use strict";
+
+        if (!window.pdfjsLib) {
+          document.getElementById("err").textContent = "pdf.js failed to load (check vendor/pdf.min.js path).";
+          document.getElementById("err").hidden = false;
+          return;
+        }
+
+        pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+          "vendor/pdf.worker.min.js",
+          window.location.href
+        ).href;
+
+        var fileEl = document.getElementById("pdfFile");
+        var scaleEl = document.getElementById("renderScale");
+        var canvas = document.getElementById("out");
+        var statsPanel = document.getElementById("statsPanel");
+        var pdfSizeEl = document.getElementById("pdfSize");
+        var canvasSizeEl = document.getElementById("canvasSize");
+        var scaleUsedEl = document.getElementById("scaleUsed");
+        var errEl = document.getElementById("err");
+
+        function showError(msg) {
+          errEl.textContent = msg || "";
+          errEl.hidden = !msg;
+        }
+
+        function fmt(n) {
+          if (typeof n !== "number" || !Number.isFinite(n)) {
+            return "—";
+          }
+          return String(Math.round(n * 1000) / 1000);
+        }
+
+        fileEl.addEventListener("change", function () {
+          showError("");
+          statsPanel.hidden = true;
+          var f = fileEl.files && fileEl.files[0];
+          if (!f) {
+            return;
+          }
+          var reader = new FileReader();
+          reader.onerror = function () {
+            showError("Could not read file.");
+          };
+          reader.onload = function () {
+            var buf = reader.result;
+            var scale = parseFloat(scaleEl.value);
+            if (!Number.isFinite(scale) || scale <= 0) {
+              scale = 2;
+            }
+            var task = pdfjsLib.getDocument({ data: buf, verbosity: 0 });
+            task.promise
+              .then(function (pdf) {
+                return pdf.getPage(1);
+              })
+              .then(function (page) {
+                var vp1 = page.getViewport({ scale: 1 });
+                var vp = page.getViewport({ scale: scale });
+                var w = Math.ceil(vp.width);
+                var h = Math.ceil(vp.height);
+                canvas.width = w;
+                canvas.height = h;
+                var ctx = canvas.getContext("2d");
+                ctx.fillStyle = "#ffffff";
+                ctx.fillRect(0, 0, w, h);
+                ctx.imageSmoothingEnabled = false;
+                return page
+                  .render({ canvasContext: ctx, viewport: vp })
+                  .promise.then(function () {
+                    pdfSizeEl.textContent =
+                      fmt(vp1.width) + " × " + fmt(vp1.height) + " (same units as pdf.js viewport; typically PDF points)";
+                    canvasSizeEl.textContent = String(w) + " × " + String(h) + " px (canvas.width × canvas.height)";
+                    scaleUsedEl.textContent = String(scale);
+                    statsPanel.hidden = false;
+                  });
+              })
+              .catch(function (e) {
+                showError(e && e.message ? e.message : String(e));
+              });
+          };
+          reader.readAsArrayBuffer(f);
+        });
+
+        scaleEl.addEventListener("change", function () {
+          if (fileEl.files && fileEl.files[0]) {
+            fileEl.dispatchEvent(new Event("change"));
+          }
+        });
+      })();
+    </script>
+  </body>
+</html>
