@@ -223,7 +223,10 @@
     <br /><br />
     <strong>No physical printer?</strong> For <strong>ZPL on the wire</strong> (no PostScript): run the capture server and use <strong>Path A</strong> or <strong>Path B</strong> above; check <code>tools/captured_prints/</code> for <code>.bin</code> plus auto <code>.png</code>/<code>.pdf</code>. The <code>QZCapture</code> CUPS queue is <strong>Generic PostScript</strong> — use it for PS/pixel testing, not ZPL mimicry; see <code>tools/zebra_like_virtual_printer.txt</code>. Install queue: <code>cd tools &amp;&amp; python3 install_virtual_printer.py</code>.
   </p>
-  <script src="vendor/pdf.min.js"></script>
+  <script
+    src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.min.js"
+    crossorigin="anonymous"
+  ></script>
   <script src="pdfToZpl.js"></script>
   <script src="usbRawPrinter.js"></script>
   <script src="vendor/qz-tray.js"></script>

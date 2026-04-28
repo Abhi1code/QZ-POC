@@ -19,6 +19,13 @@
   var MAX_RASTER_PIXELS = 24 * 1024 * 1024;
 
   /**
+   * Default pdf.js worker (legacy UMD bundle). Must match the pdfjs-dist version
+   * loaded in index.html / pdf-canvas-debug.html. Override with {@code window.__PDFJS_WORKER_URL__}.
+   */
+  var PDFJS_LEGACY_CDN_WORKER =
+    "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.worker.min.js";
+
+  /**
    * @param {number} vp1w viewport width at scale 1
    * @param {number} vp1h viewport height at scale 1
    * @param {{
@@ -113,13 +120,13 @@
 
   function ensureWorker() {
     if (!global.pdfjsLib) {
-      throw new Error("pdf.js not loaded (include vendor/pdf.min.js before pdfToZpl.js).");
+      throw new Error(
+        "pdf.js not loaded (include pdf.min.js from CDN before pdfToZpl.js; see index.html)."
+      );
     }
     if (!global.pdfjsLib.GlobalWorkerOptions.workerSrc) {
-      global.pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-        "vendor/pdf.worker.min.js",
-        global.location.href
-      ).href;
+      global.pdfjsLib.GlobalWorkerOptions.workerSrc =
+        global.__PDFJS_WORKER_URL__ || PDFJS_LEGACY_CDN_WORKER;
     }
   }
 

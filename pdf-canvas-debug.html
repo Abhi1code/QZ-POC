@@ -89,21 +89,24 @@
     </div>
     <p class="err" id="err" hidden></p>
 
-    <script src="vendor/pdf.min.js"></script>
+    <script
+      src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.min.js"
+      crossorigin="anonymous"
+    ></script>
     <script>
       (function () {
         "use strict";
 
         if (!window.pdfjsLib) {
-          document.getElementById("err").textContent = "pdf.js failed to load (check vendor/pdf.min.js path).";
+          document.getElementById("err").textContent =
+            "pdf.js failed to load (check network / CDN script in pdf-canvas-debug.html).";
           document.getElementById("err").hidden = false;
           return;
         }
 
-        pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-          "vendor/pdf.worker.min.js",
-          window.location.href
-        ).href;
+        pdfjsLib.GlobalWorkerOptions.workerSrc =
+          window.__PDFJS_WORKER_URL__ ||
+          "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.worker.min.js";
 
         var fileEl = document.getElementById("pdfFile");
         var scaleEl = document.getElementById("renderScale");
